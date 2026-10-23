@@ -6,12 +6,49 @@ st.set_page_config(page_title="Petty Cash Dashboard", layout="wide")
 st.title("Petty Cash Dashboard")
 
 # ---------- 1. Load data ----------
-uploaded = st.sidebar.file_uploader("Upload exported transactions (CSV)", type="csv")
+def read_pdf(file, password=None):
+    """Extract transaction tables from a bank e-statement PDF."""
+    import pdfplumber
+
+    rows = []
+    with pdfplumber.open(file, password=password or None) as pdf:
+        for page in pdf.pages:
+            for table in page.extract_tables():
+                rows.extend(table)
+    rows = [[(c or "").replace("\n", " ").strip() for c in r] for r in rows]
+    rows = [r for r in rows if any(r)]
+    if len(rows) < 2:
+        return pd.DataFrame()
+    header = rows[0]
+    # make header names unique and non-empty
+    seen, clean = {}, []
+    for i, h in enumerate(header):
+        h = h or f"col_{i}"
+        seen[h] = seen.get(h, 0) + 1
+        clean.append(h if seen[h] == 1 else f"{h}_{seen[h]}")
+    body = [r for r in rows[1:] if r != header and len(r) == len(clean)]
+    return pd.DataFrame(body, columns=clean)
+
+
+uploaded = st.sidebar.file_uploader("Upload exported transactions", type=["csv", "pdf"])
+pdf_password = st.sidebar.text_input("PDF password (if any)", type="password")
 if uploaded is None:
-    st.info("Upload a CSV export in the sidebar to get started.")
+    st.info("Upload a CSV or PDF e-statement in the sidebar to get started.")
     st.stop()
 
-df = pd.read_csv(uploaded)
+if uploaded.name.lower().endswith(".pdf"):
+    try:
+        df = read_pdf(uploaded, pdf_password)
+    except Exception as e:
+        st.error(f"Could not open the PDF (wrong password?): {e}")
+        st.stop()
+    if df.empty:
+        st.error("No transaction table found in this PDF. Layout may need a custom parser.")
+        st.stop()
+    st.caption("Check the preview below, then map the columns in the sidebar.")
+    st.dataframe(df.head(10))
+else:
+    df = pd.read_csv(uploaded)
 
 # ---------- 2. Map your columns ----------
 # Bank/e-wallet exports use different column names, so pick them here.
